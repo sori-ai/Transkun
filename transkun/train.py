@@ -80,9 +80,15 @@ def train(workerId, nWorker, filename, runSeed, args):
     datasetPath = args.datasetPath
     datasetPicklePath = args.datasetMetaFile_train
     datasetPicklePath_val = args.datasetMetaFile_val
+    
+    datasetPickleList = ['data/train_EGDB.pickle', 
+                         'data/train_GAPS.pickle', 
+                         'data/train_Guitarset.pickle',
+                         'data/train_maestro.pickle']
 
-    dataset = Data.DatasetMaestro(datasetPath, datasetPicklePath)
-    datasetVal = Data.DatasetMaestro(datasetPath, datasetPicklePath_val)
+    datasetPickleList_val = ['data/val_maestro.pickle']
+    dataset = Data.DatasetMaestro(datasetPath, datasetPickleList)
+    datasetVal = Data.DatasetMaestro(datasetPath, datasetPickleList_val)
 
     print("#{} loaded".format(workerId))
 
@@ -111,7 +117,7 @@ def train(workerId, nWorker, filename, runSeed, args):
 
     augmentator = None
     if args.augment:
-        augmentator = Data.AugmentatorAudiomentations(sampleRate=44100, noiseFolder = args.noiseFolder, convIRFolder = args.irFolder)
+        augmentator = Data.AugmentatorAudiomentations(sampleRate=16000, noiseFolder = args.noiseFolder, convIRFolder = args.irFolder)
 
     for epoc in range(startEpoch, 1000000):
         # average length will be chunkSize

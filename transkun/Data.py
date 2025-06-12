@@ -14,6 +14,7 @@ import torch
 import random
 from collections import defaultdict, deque
 import csv
+import soundfile as sf
 
 
 # a local definition of the midi note object
@@ -367,7 +368,8 @@ def createDatasetMaestroCSV(datasetPath, datasetMetaCSVPath, extendSustainPedal=
                 nSamples = f.getnframes()
                 nChannel = f.getnchannels()
 
-
+            e["audio_filename"] = audioPath
+            e["midi_filename"] = midiPath
             e["notes"] = events
             e["fs"] = fs
             e["nSamples"] = nSamples
@@ -378,9 +380,10 @@ def createDatasetMaestroCSV(datasetPath, datasetMetaCSVPath, extendSustainPedal=
 
 
 def readAudioSlice(audioPath, begin, end, normalize=True):
-    from scipy.io import wavfile
-    import scipy.io
-    fs, data = wavfile.read(audioPath, mmap = True)
+    # from scipy.io import wavfile
+    # import scipy.io
+    # fs, data = wavfile.read(audioPath, mmap = True)
+    data, fs = sf.read(audioPath, dtype=np.int16)
         
     b = math.floor((begin)*fs)
     e = math.floor(end*fs)
@@ -455,14 +458,16 @@ def writeMidi(notes, resolution = 960):
 
 
 class DatasetMaestro:
-    def __init__(self, datasetPath,  datasetAnnotationPicklePath):
-        self.datasetPath = datasetPath
-        self.datasetAnnotationPicklePath = datasetAnnotationPicklePath
+    def __init__(self, datasetRootPath,  datasetAnnotationPickleList):
+        self.datasetRootPath = datasetRootPath
+        self.datasetAnnotationPickleList = datasetAnnotationPickleList
+        self.data = []
 
         t1 = time.time()
         print("loading the annotation file...")
-        with open(datasetAnnotationPicklePath, "rb") as f:
-            self.data = pickle.load(f)
+        for pkl in datasetAnnotationPickleList:
+            with open(pkl, "rb") as f:
+                self.data.extend(pickle.load(f))
         t2 = time.time()
         
         self.durations = [float(_["duration"]) for _ in self.data]
@@ -482,12 +487,12 @@ class DatasetMaestro:
         print("elapsed:", t2-t1)
 
     def __getstate__(self):
-        return {"datasetPath":self.datasetPath,  "datasetAnnotationPicklePath": self.datasetAnnotationPicklePath}
+        return {"datasetPath":self.datasetRootPath,  "datasetAnnotationPickleList": self.datasetAnnotationPickleList}
 
     def __setstate__(self, d):
         datasetPath = d["datasetPath"]
-        datasetAnnotationPicklePath = d["datasetAnnotationPicklePath"]
-        self.__init__(datasetPath, datasetAnnotationPicklePath)
+        datasetAnnotationPickleList = d["datasetAnnotationPickleList"]
+        self.__init__(datasetPath, datasetAnnotationPickleList)
 
     def getSample(self, idx, normalize=True):
         # for evaluation
@@ -497,9 +502,11 @@ class DatasetMaestro:
         audioName = e["audio_filename"]
 
         audioPath = e["audio_filename"]
-        audioPath = os.path.join(self.datasetPath, audioPath)
-        from scipy.io import wavfile
-        fs, result= wavfile.read(audioPath, mmap = False)
+        # audioPath = os.path.join(self.datasetRootPath, audioPath)
+        # from scipy.io import wavfile
+        # fs, result= wavfile.read(audioPath, mmap = False)
+        result, fs = sf.read(audioPath)
+
 
         if normalize:
             tMax = (np.iinfo(result.dtype)).max
@@ -519,7 +526,7 @@ class DatasetMaestro:
         audioName = e["audio_filename"]
 
         audioPath = e["audio_filename"]
-        audioPath = os.path.join(self.datasetPath, audioPath)
+        audioPath = os.path.join(self.datasetRootPath, audioPath)
         return audioPath
      
 
@@ -563,7 +570,7 @@ class DatasetMaestro:
         # fetch the corresponding audio chunk from the file
 
         audioPath = e["audio_filename"]
-        audioPath = os.path.join(self.datasetPath, audioPath)
+        # audioPath = os.path.join(self.datasetRootPath, audioPath)
 
         audioSlice, fs = readAudioSlice(audioPath, begin,end, audioNormalize)
 
@@ -747,7 +754,7 @@ class Augmentator:
 
 class AugmentatorAudiomentations:
     def __init__(self,
-                 sampleRate = 44100,
+                 sampleRate = 16000,
                  pitchShiftRange = (-0.2, 0.2),
                  eqDBRange =  (-3, 3),
                  snrRange = (3, 40),
@@ -1112,3 +1119,81 @@ def prepareIntervals(notes, hopSizeInSecond, targetPitch):
     return result
 
     
+def createDatasetMAESTRO_2(datasetPath, datasetMetaCSVPath, extendSustainPedal=True):
+    datasetMetaCSVPath = Path(datasetMetaCSVPath)
+
+    samplesAll = []
+
+    with datasetMetaCSVPath.open() as f:
+        # metaInfo = json.load(f)
+        metaInfo = csv.DictReader(f)
+        for e in metaInfo:
+            print(e)
+            midiPath = os.path.join(datasetPath, e["midi_filename"])
+            audioPath = os.path.join(datasetPath, e["audio_filename"].replace('.wav', '.flac'))
+            
+            midiFile = pretty_midi.PrettyMIDI(midiPath)
+            assert(len(midiFile.instruments) == 1)
+
+            inst = midiFile.instruments[0]
+            if len(midiFile.instruments)>1:
+                raise Exception("contains more than one track")
+            events = parseEventAll(inst.notes, inst.control_changes, extendSustainPedal=extendSustainPedal)
+
+            data, fs = sf.read(audioPath)
+            nSamples = len(data)
+            if data.ndim == 1:
+                nChannel = 1
+            else:
+                nChannel = data.shape[1]
+
+            e["audio_filename"] = audioPath
+            e["notes"] = events
+            e["fs"] = fs
+            e["nSamples"] = nSamples
+            e["nChannel"] = nChannel
+            samplesAll.append(e)
+
+    return samplesAll
+
+def createDataset_2(dataset_path, csv_path, extendSustainPedal=True):
+
+    samplesAll = []
+    with open(csv_path, 'r') as f:
+        pairs = csv.reader(f)
+        # skip header
+        next(pairs)
+        for audio, midi in pairs:
+            audio_path = os.path.join(dataset_path, audio)
+            midi_path = os.path.join(dataset_path, midi)
+            print(midi_path)
+            midi_file = pretty_midi.PrettyMIDI(midi_path)
+            if midi_file.instruments != 1:
+                # merge all instruments
+                new_midi = pretty_midi.PrettyMIDI()
+                new_midi.instruments.append(pretty_midi.Instrument(program=0))
+                for instrument in midi_file.instruments:
+                    new_midi.instruments[0].notes.extend(instrument.notes)
+                    new_midi.instruments[0].control_changes.extend(instrument.control_changes)
+                inst = new_midi.instruments[0]
+            else:
+                inst = midi_file.instruments[0]
+
+            events = parseEventAll(inst.notes, inst.control_changes, extendSustainPedal=extendSustainPedal)
+            data, fs = sf.read(audio_path)
+            nSamples = len(data)
+            if data.ndim == 1:
+                nChannel = 1
+            else:
+                nChannel = data.shape[1]
+
+            e = {}
+            e['duration'] = nSamples / fs
+            e["audio_filename"] = audio_path
+            e["midi_filename"] = midi_path
+            e["notes"] = events
+            e["fs"] = fs
+            e["nSamples"] = nSamples
+            e["nChannel"] = nChannel
+            samplesAll.append(e)
+    return samplesAll
